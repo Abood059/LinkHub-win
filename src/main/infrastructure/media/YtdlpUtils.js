@@ -1,0 +1,229 @@
+// src/main/infrastructure/media/YtdlpUtils.js
+'use strict';
+
+const path = require('path');
+const fs = require('fs').promises;
+const os = require('os');
+
+/**
+ * تنظيف اسم file من أحرف غير صالحة
+ */
+function sanitizeFileName(fileName) {
+    if (!fileName) return 'download';
+    // إزالة أو استبدال الأحرف غير الصالحة لأسماء fileات
+    // يشمل الأحرف المحظورة في Windows/Linux بAdd إلى أحرف خاصة شائعة
+    return fileName
+        .replace(/[<>:"/\\|?*｜«»""''—–]/g, '_')  // استبدال الأحرف المحظورة والخاصة
+        .replace(/\s+/g, '_')           // استبدال المسافات بـ underscore
+        .substring(0, 200);             // تحديد طول أقصى 200 حرف
+}
+
+/**
+ * تنسيق البايتات إلى وحدة مقروءة
+ */
+function formatBytes(bytes) {
+    if (bytes === 0) return '0B';
+    const k = 1024;
+    const sizes = ['B', 'KiB', 'MiB', 'GiB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + sizes[i];
+}
+
+/**
+ * حساب Size الكلي للتحميل المركب
+ */
+function calculateTotalSize(formatId, formatsData) {
+    if (!formatId.includes('+') || !formatsData || !formatsData.formats) {
+        return { totalSize: null, hasSizeInfo: false };
+    }
+    
+    const formatIds = formatId.split('+');
+    let totalSize = 0;
+    let hasValidSize = false;
+    
+    for (const fid of formatIds) {
+        const format = formatsData.formats.find(f => f.formatId === fid);
+        if (format && format.filesize) {
+            totalSize += format.filesize;
+            hasValidSize = true;
+        }
+    }
+    
+    // إذا كان لدينا حجم واحد فقط، ضربه في 2 كتقدير
+    if (hasValidSize && formatIds.length === 2) {
+        const sizes = formatIds.map(fid => {
+            const format = formatsData.formats.find(f => f.formatId === fid);
+            return format && format.filesize ? format.filesize : 0;
+        }).filter(s => s > 0);
+        
+        if (sizes.length === 1) {
+            totalSize = sizes[0] * 2;
+        }
+    }
+    
+    return { totalSize: hasValidSize ? totalSize : null, hasSizeInfo: hasValidSize };
+}
+
+/**
+ * تعديل نسبة التقدم للتحميلات المركبة (فيديو+صوت متتابعان عبر aria2c)
+ *
+ * aria2c يبلّغ عن كل ملف على حدة، لذلك نجمّع:
+ *   completedBytes (ملفات انتهت) + downloadedBytes للملف الحالي
+ *
+ * إشارات انتقال file التالي من Outputs الفعلية:
+ *   1) سطر yt-dlp: [download] 100% of X.XXiB ...
+ *   2) تغيّر معرّف aria2c (GID) بين [#c817a5 ...] و [#99fd6f ...]
+ *   3) انخفاض النسبة المئوية (fallback من yt-dlp-wrap-plus)
+ */
+function adjustProgressForCombinedDownload(currentPercent, currentSize, entry, progressData) {
+    // إذا لم يكن تحميل مركب أو لا تتوفر معلومات Size، أرجع value كما هي
+    if (!entry.hasSizeInfo || !entry.totalSize || !entry.formatId.includes('+')) {
+        return { percent: currentPercent, size: currentSize };
+    }
+
+    if (entry.completedBytes == null) entry.completedBytes = 0;
+    if (entry.lastFileDownloadedBytes == null) entry.lastFileDownloadedBytes = 0;
+    if (entry.lastFileTotalBytes == null) entry.lastFileTotalBytes = 0;
+    if (entry.currentFileIndex == null) entry.currentFileIndex = 0;
+
+    const toDisplay = (downloaded) => ({
+        percent: Math.round(Math.min((downloaded / entry.totalSize) * 100, 100) * 10) / 10,
+        size: `${formatBytes(downloaded)}/${formatBytes(entry.totalSize)}`
+    });
+
+    // اكتمال ملف من ملخص yt-dlp — أضف حجمه للملفات المكتملة
+    if (progressData.fileComplete && progressData.totalBytes > 0) {
+        entry.completedBytes += progressData.totalBytes;
+        entry.lastAriaGid = null;
+        entry.lastFileDownloadedBytes = 0;
+        entry.lastFileTotalBytes = 0;
+        entry.currentFileIndex++;
+        entry.downloadedBytes = entry.completedBytes;
+        entry.lastPercent = 100;
+        return toDisplay(entry.downloadedBytes);
+    }
+
+    // Verify من توفر بيانات البايتات من yt-dlp-wrap-plus
+    const hasByteProgress = progressData.downloadedBytes != null
+        && progressData.totalBytes > 0;
+
+    if (hasByteProgress) {
+        const gid = progressData.gid || null;
+
+        // ملف جديد عبر تغيّر GID (fallback إذا فاتنا سطر 100%)
+        if (gid && entry.lastAriaGid && gid !== entry.lastAriaGid) {
+            const finishedBytes = entry.lastFileTotalBytes || entry.lastFileDownloadedBytes || 0;
+            entry.completedBytes += finishedBytes;
+            entry.currentFileIndex++;
+        }
+
+        if (gid) entry.lastAriaGid = gid;
+        entry.lastFileDownloadedBytes = progressData.downloadedBytes;
+        entry.lastFileTotalBytes = progressData.totalBytes;
+        entry.lastPercent = currentPercent;
+
+        entry.downloadedBytes = entry.completedBytes + progressData.downloadedBytes;
+        return toDisplay(entry.downloadedBytes);
+    }
+
+    // Fallback: استخدام النسب المئوية عند غياب بيانات البايتات
+    // هذا يحدث مع yt-dlp-wrap-plus عند عدم توفير بيانات البايتات
+    if (entry.lastPercent && currentPercent < entry.lastPercent - 10) {
+        // انتقال من ملف إلى آخر (انخفاض كبير في النسبة)
+        entry.currentFileIndex++;
+        entry.completedBytes = Math.floor((entry.currentFileIndex / 2) * entry.totalSize);
+    }
+    entry.lastPercent = currentPercent;
+
+    const fileCount = 2;
+    const totalPercent = (entry.currentFileIndex * (100 / fileCount)) + (currentPercent / fileCount);
+    entry.downloadedBytes = Math.floor((Math.min(totalPercent, 100) / 100) * entry.totalSize);
+
+    return {
+        percent: Math.round(Math.min(totalPercent, 100) * 10) / 10,
+        size: `${formatBytes(entry.downloadedBytes)}/${formatBytes(entry.totalSize)}`
+    };
+}
+
+/**
+ * إنشاء مجلد مؤقت للتحميلات
+ */
+async function createTempDirectory(pathService = null) {
+    let tempDir;
+    if (pathService && typeof pathService.getDownloadsTempDir === 'function') {
+        tempDir = pathService.getDownloadsTempDir();
+    } else {
+        // Fallback to process.cwd() if pathService is not available
+        tempDir = path.join(process.cwd(), 'temp', 'downloads');
+    }
+    try {
+        await fs.mkdir(tempDir, { recursive: true });
+        return tempDir;
+    } catch (err) {
+        throw new Error(`Failed to create temp directory: ${err.message}`);
+    }
+}
+
+/**
+ * Get progress template compatible with unified JSON format
+ * يستخدم متغيرات yt-dlp الصحيحة لاستخراج بيانات Size الفعلي
+ */
+function getProgressTemplate() {
+    return JSON.stringify({
+        progress: '%(progress._percent_str)s',
+        speed: '%(speed)s',
+        downloaded_bytes: '%(downloaded_bytes)s',
+        total_bytes: '%(total_bytes)s',
+        eta: '%(eta)s',
+        elapsed: '%(elapsed)s'
+    });
+}
+
+/**
+ * نقل file المحمل إلى مجلد التنزيلات
+ */
+async function moveDownloadedFile(tempFilePath, title, deviceIds, downloadsDir = null) {
+    // استخدام path المحدد أو path الافتراضي (~/Downloads)
+    if (!downloadsDir) {
+        downloadsDir = path.join(os.homedir(), 'Downloads');
+    }
+    
+    try {
+        await fs.mkdir(downloadsDir, { recursive: true });
+        
+        // استخراج الامتداد من file المحمل
+        const fileExt = path.extname(tempFilePath);
+        
+        // إنشاء اسم file الجديد باستخدام title
+        let newFileName = sanitizeFileName(title) || path.basename(tempFilePath);
+        
+        // إضافة الامتداد إذا لم يكن موجوداً
+        if (!newFileName.endsWith(fileExt)) {
+            newFileName += fileExt;
+        }
+        
+        const finalFilePath = path.join(downloadsDir, newFileName);
+        
+        await fs.copyFile(tempFilePath, finalFilePath);
+
+        // Delete file المؤقت بعد نجاح transfer
+        await fs.unlink(tempFilePath);
+
+        return {
+            finalPath: finalFilePath,
+            tempPath: tempFilePath
+        };
+    } catch (err) {
+        throw new Error(`Failed to move file: ${err.message}`);
+    }
+}
+
+module.exports = {
+    sanitizeFileName,
+    calculateTotalSize,
+    adjustProgressForCombinedDownload,
+    createTempDirectory,
+    getProgressTemplate,
+    moveDownloadedFile,
+    formatBytes
+};
