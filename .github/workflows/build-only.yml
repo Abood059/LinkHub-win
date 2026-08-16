@@ -11,6 +11,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -41,5 +44,4 @@ jobs:
       - name: Build and publish Windows app
         run: npm run build:win -- --publish always
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
-
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
