@@ -25,12 +25,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install dependencies (skip native build)
+        run: npm install --ignore-scripts
         env:
           ELECTRON_CACHE: ${{ github.workspace }}/.electron
 
-      - name: Rebuild native modules
+      - name: Rebuild native modules for Electron
         run: npm run rebuild
 
       - name: Build Windows app
