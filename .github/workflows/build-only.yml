@@ -34,7 +34,7 @@ jobs:
         run: npm run rebuild
 
       - name: Build Windows app
-        run: npm run build:win
+        run: npm run build:win -- --publish never
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
