@@ -41,7 +41,14 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npm run rebuild
 
-      - name: Build and publish Windows app
-        run: npm run build:win -- --publish always
+      - name: Build Windows app
+        run: npm run build:win -- --publish never
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          files: dist/**/*.exe
+          # draft: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
