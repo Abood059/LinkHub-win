@@ -46,7 +46,7 @@ class DownloadOrchestrator {
         console.log('[DownloadOrchestrator] deviceIds:', deviceIds);
         console.log('[DownloadOrchestrator] options:', options);
         if (!url || !formatId) {
-            console.log('[DownloadOrchestrator] Error: url or formatId missing'');
+            console.log('[DownloadOrchestrator] Error: url or formatId missing');
             throw new Error('url and formatId are required');
         }
 
@@ -84,7 +84,7 @@ class DownloadOrchestrator {
         const adapterOptions = { ...options, deviceIds, formatsData: options.formatsData };
         console.log('[DownloadOrchestrator] adapterOptions:', adapterOptions);
         const result = this._ytdlpAdapter.startDownload(url, formatId, adapterOptions);
-        console.log('[DownloadOrchestrator] startDownload result from adapter:', result):', result);
+        console.log('[DownloadOrchestrator] startDownload result from adapter:', result);
         return result;
     }
 
@@ -101,19 +101,19 @@ class DownloadOrchestrator {
             throw new Error('fileId is required');
         }
         const result = this._ytdlpAdapter.stopDownload(fileId);
-        console.log('[DownloadOrchestrator] stopDownload result:', result):', result);
+        console.log('[DownloadOrchestrator] stopDownload result:', result);
         return result;
     }
 
     async resumeDownload(processId, url, formatId, deviceIds = null, options = {}) {
-        console.log('[DownloadOrchestrator] === Starting resumeDownload ===' ===');
+        console.log('[DownloadOrchestrator] === Starting resumeDownload ===');
         console.log('[DownloadOrchestrator] processId:', processId);
         console.log('[DownloadOrchestrator] url:', url);
         console.log('[DownloadOrchestrator] formatId:', formatId);
         console.log('[DownloadOrchestrator] deviceIds:', deviceIds);
         console.log('[DownloadOrchestrator] options:', options);
         if (!url || !formatId) {
-            console.log('[DownloadOrchestrator] Error: url or formatId missing'');
+            console.log('[DownloadOrchestrator] Error: url or formatId missing');
             throw new Error('url and formatId are required');
         }
 
